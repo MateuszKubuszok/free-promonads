@@ -1,6 +1,8 @@
 package promonads
 package free
 
+import cats.syntax.all._
+
 import org.specs2.mutable.Specification
 
 sealed trait MyDomain[A, B] extends Product with Serializable
@@ -17,10 +19,8 @@ object MyDomain {
 
 class FreePromonadSpec extends Specification {
 
-  val program = MyDomain.freeCreateData andThen (for {
-    data <- MyDomain.freeFetchData
-    _ <- MyDomain.freeDeleteData
-  } yield s"data: $data")
+  val program1 = MyDomain.freeCreateData andThen MyDomain.freeFetchData
+  val program2 = MyDomain.freeCreateData andThen MyDomain.freeDeleteData
 
   val storage = scala.collection.mutable.Map.empty[java.util.UUID, String]
 
@@ -41,11 +41,14 @@ class FreePromonadSpec extends Specification {
     }
   }
 
-  "example program" should {
+  "example programs" should {
 
     "run successfully" in {
-      program.foldMap(interpreter).apply("example data") should_=== "data: Some(example data)"
       storage should beEmpty
+      program1.foldMap(interpreter).apply("example data") should_=== Option("example data")
+      storage.size should_=== 1
+      program2.foldMap(interpreter).apply("example data")
+      storage.size should_=== 1
     }
   }
 }

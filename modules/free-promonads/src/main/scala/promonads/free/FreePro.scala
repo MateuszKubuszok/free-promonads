@@ -1,33 +1,29 @@
 package promonads
 package free
 
+import cats.syntax.all._
+
 sealed trait FreePro[S[_, _], A, B] extends Product with Serializable {
 
-  final def flatMap[C](f:       B => FreePro[S, A, C]): FreePro[S, A, C] = FreePro.FlatMap(this, f)
-  final def map[C](f:           B => C):                FreePro[S, A, C] = flatMap(f andThen FreePro.pure)
-  final def contramap[C](f:     C => A):                FreePro[S, C, B] = FreePro.Contramap(this, f)
-  final def andThen[C](freePro: FreePro[S, B, C]):      FreePro[S, A, C] = FreePro.AndThen(this, freePro)
-  final def compose[C](freePro: FreePro[S, C, A]):      FreePro[S, C, B] = FreePro.AndThen(freePro, this)
+  import FreePro._
 
-  // not stack safe - if this makes sense, we would have to rewrite it into sth better
-  @SuppressWarnings(Array("org.wartremover.warts.Recursion"))
-  final def foldMap[T[_, _]: Promonad](f2k: S ~~> T): T[A, B] = this match {
-    case FreePro.Lifted(f)                 => Promonad[T].lift(f)
-    case FreePro.Suspend(sab)              => f2k(sab)
-    case FreePro.FlatMap(fab, flatMap)     => Promonad[T].flatMap(fab.foldMap(f2k))(flatMap(_).foldMap(f2k))
-    case FreePro.Contramap(fab, contramap) => Promonad[T].lmap(fab.foldMap(f2k))(contramap)
-    case FreePro.AndThen(fab, fbc)         => Promonad[T].andThen(fab.foldMap(f2k), fbc.foldMap(f2k))
+  final def foldMap[T[_, _]: Promonad](f2k: S ~~> T): T[A, B] = {
+    @scala.annotation.tailrec
+    def rewrite[A1, B1, C1](head: T[A1, B1], tail: FreePro[S, B1, C1]): T[A1, C1] = tail match {
+      case Lifted(f)                   => head.rmap(f)
+      case Suspend(sab)                => head >>> f2k(sab)
+      case Merge(Lifted(f), fbc)       => rewrite(head.rmap(f), fbc)
+      case Merge(Suspend(sab), fbc)    => rewrite(head >>> f2k(sab), fbc)
+      case Merge(Merge(fad, fdb), fbc) => rewrite(head, Merge(fad, Merge(fdb, fbc)))
+    }
+    rewrite(Promonad[T].id[A], this)
   }
 }
 object FreePro {
 
-  final private[FreePro] case class Lifted[S[_, _], A, B](f:       A => B) extends FreePro[S, A, B]
-  final private[FreePro] case class Suspend[S[_, _], A, B](sab:    S[A, B]) extends FreePro[S, A, B]
-  final private[FreePro] case class FlatMap[S[_, _], A, B, C](fab: FreePro[S, A, B], flatMap: B => FreePro[S, A, C])
-      extends FreePro[S, A, C]
-  final private[FreePro] case class Contramap[S[_, _], A, B, C](fab: FreePro[S, A, B], contramap: C => A)
-      extends FreePro[S, C, B]
-  final private[FreePro] case class AndThen[S[_, _], A, B, C](fab: FreePro[S, A, B], fbc: FreePro[S, B, C])
+  final private[FreePro] case class Lifted[S[_, _], A, B](f:     A => B) extends FreePro[S, A, B]
+  final private[FreePro] case class Suspend[S[_, _], A, B](sab:  S[A, B]) extends FreePro[S, A, B]
+  final private[FreePro] case class Merge[S[_, _], A, B, C](fab: FreePro[S, A, B], fbc: FreePro[S, B, C])
       extends FreePro[S, A, C]
 
   final def id[S[_, _], A]: FreePro[S, A, A] = lift(identity)
@@ -36,8 +32,7 @@ object FreePro {
   final def suspend[S[_, _], A, B](suspended: S[A, B]): FreePro[S, A, B] = Suspend(suspended)
 
   implicit def promonadInstance[S[_, _]]: Promonad[FreePro[S, ?, ?]] = new Promonad[FreePro[S, ?, ?]] {
-    def lift[A, B](f:         A => B): FreePro[S, A, B] = FreePro.lift(f)
-    def compose[A, B, C](f:   FreePro[S, B, C], g: FreePro[S, A, B]): FreePro[S, A, C] = f compose g
-    def flatMap[A, B, C](fab: FreePro[S, A, B])(f: B => FreePro[S, A, C]): FreePro[S, A, C] = fab.flatMap(f)
+    def lift[A, B](f:       A => B): FreePro[S, A, B] = FreePro.lift(f)
+    def compose[A, B, C](f: FreePro[S, B, C], g: FreePro[S, A, B]): FreePro[S, A, C] = FreePro.Merge(g, f)
   }
 }
